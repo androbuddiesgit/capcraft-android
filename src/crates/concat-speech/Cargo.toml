@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Speech in and out: on-device transcription with whisper.cpp, and text to speech with Kokoro."
+description = "Speech in and out: on-device transcription with whisper.cpp, and text to speech with Kokoro, Pocket TTS and Piper (Indonesian)."
 
 [dependencies]
 concat-host.workspace = true

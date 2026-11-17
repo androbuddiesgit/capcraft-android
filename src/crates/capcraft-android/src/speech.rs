@@ -113,7 +113,7 @@ pub struct SpeechModel {
     pub id: String,
     /// The engine's name for it.
     pub label: String,
-    /// "whisper", "kokoro" or "pocket".
+    /// "whisper", "kokoro", "pocket" or "piper".
     pub family: String,
     /// About how big the download is.
     pub size_bytes: u64,
@@ -128,7 +128,7 @@ pub struct Voice {
     pub id: i32,
     /// Its name.
     pub name: String,
-    /// "kokoro" or "pocket" (the model family it needs).
+    /// "kokoro", "pocket" or "piper" (the model family it needs).
     pub family: String,
 }
 

@@ -10,7 +10,7 @@
 //! sherpa's progress callback gives us cancellation anyway - returning
 //! `false` from it stops synthesis mid-sentence.
 //!
-//! Three families of model, one front. **Kokoro** is one network with
+//! Four families of model, one front. **Kokoro** is one network with
 //! many built-in speakers, addressed by integer id: the English and
 //! Chinese ones its lexicons cover are the voices it offers. **Pocket
 //! TTS** has no speakers of its own: every voice is a few seconds of
@@ -20,7 +20,9 @@
 //! already in the project. **Chatterbox Turbo** reads in a recording the
 //! same way, closer to a studio voice, at a gigabyte and a wait; it runs
 //! through ONNX Runtime directly ([`crate::chatterbox`]) rather than
-//! sherpa, on the desktop only.
+//! sherpa, on the desktop only. **Piper** is one small VITS network per
+//! language: the Indonesian bundle reads Bahasa Indonesia with a single
+//! voice, News.
 //!
 //! Three pieces:
 //!
@@ -45,7 +47,7 @@ use concat_host::{AppDirs, SingleFlight, projects};
 use serde::{Deserialize, Serialize};
 use sherpa_onnx::{
     GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsKokoroModelConfig,
-    OfflineTtsModelConfig, OfflineTtsPocketModelConfig,
+    OfflineTtsModelConfig, OfflineTtsPocketModelConfig, OfflineTtsVitsModelConfig,
 };
 
 use crate::{DownloadProgress, JobStage};
@@ -63,6 +65,9 @@ pub enum Family {
     /// Resemble's Chatterbox Turbo: a voice is a reference recording,
     /// and the engine is ONNX Runtime rather than sherpa.
     Chatterbox,
+    /// Piper (VITS): one small network per language; the Indonesian
+    /// bundle reads Bahasa Indonesia.
+    Piper,
 }
 
 /// The family a model id belongs to, by the bundle's name.
@@ -71,6 +76,8 @@ pub fn family_of(id: &str) -> Family {
         Family::Pocket
     } else if id.starts_with("chatterbox") {
         Family::Chatterbox
+    } else if id.starts_with("vits-piper") {
+        Family::Piper
     } else {
         Family::Kokoro
     }
@@ -97,7 +104,8 @@ struct KnownModel {
 /// int8 build is the default recommendation - a third of the download for
 /// a difference most ears never find. Pocket TTS is the sherpa-onnx int8
 /// conversion of Kyutai's 100M model: English, and it reads in any voice
-/// it is given a few seconds of.
+/// it is given a few seconds of. Piper is the sherpa-onnx VITS conversion
+/// of Rhasspy's Indonesian voice: Bahasa Indonesia, one voice.
 const KNOWN_MODELS: &[KnownModel] = &[
     #[cfg(feature = "chatterbox")]
     KnownModel {
@@ -108,6 +116,15 @@ const KNOWN_MODELS: &[KnownModel] = &[
         // Nine files, each checked against its own digest in
         // `chatterbox::FILES`; this row never reaches `verify`.
         sha256: "",
+    },
+    KnownModel {
+        id: PIPER_ID_ID,
+        label: "Piper (Indonesian)",
+        blurb: "Bahasa Indonesia, one voice (News). The smallest download.",
+        approx_bytes: 67_243_848,
+        // Digest of the release asset, checked 17 Nov 2026 by downloading
+        // it: a model without one cannot be checked and so cannot be used.
+        sha256: "634b0169fe41c368e9fafe128f30647f9e0301e852ce503cd78146db524f1f12",
     },
     KnownModel {
         id: POCKET_ID,
@@ -196,6 +213,14 @@ pub const POCKET_CLONE: i32 = 1099;
 /// The Pocket bundle, which is also where the stock recordings live.
 pub const POCKET_ID: &str = "sherpa-onnx-pocket-tts-int8-2026-01-26";
 
+/// The Piper bundle for Bahasa Indonesia: Rhasspy's `news_tts` voice,
+/// as the sherpa-onnx VITS conversion.
+pub const PIPER_ID_ID: &str = "vits-piper-id_ID-news_tts-medium";
+
+/// The voices Piper offers, by our own id, out of every other family's
+/// range: one voice per bundle, named by language and voice.
+pub const PIPER_VOICES: &[(i32, &str)] = &[(3000, "id_news")];
+
 /// Chatterbox's voices. The model has no speakers of its own and ships no
 /// recording of anyone's under a licence this build may carry, so its
 /// stock voice is Pocket's Bria recording, read from the Pocket bundle:
@@ -230,6 +255,8 @@ pub fn voice_family(voice: i32) -> Option<Family> {
         Some(Family::Pocket)
     } else if CHATTERBOX_VOICES.iter().any(|(id, _, _)| *id == voice) {
         Some(Family::Chatterbox)
+    } else if PIPER_VOICES.iter().any(|(id, _)| *id == voice) {
+        Some(Family::Piper)
     } else {
         None
     }
@@ -252,6 +279,12 @@ fn voice_name(voice: i32) -> Option<&'static str> {
                 .iter()
                 .find(|(id, _, _)| *id == voice)
                 .map(|(_, name, _)| *name)
+        })
+        .or_else(|| {
+            PIPER_VOICES
+                .iter()
+                .find(|(id, _)| *id == voice)
+                .map(|(_, name)| *name)
         })
 }
 
@@ -577,6 +610,12 @@ impl Speech {
                     family: Family::Pocket,
                     avatar: None,
                 }))
+                .chain(PIPER_VOICES.iter().map(|(id, name)| VoiceInfo {
+                    id: *id,
+                    name: (*name).to_owned(),
+                    family: Family::Piper,
+                    avatar: None,
+                }))
                 // Chatterbox's stock voices are Pocket's recordings, and are
                 // only offered while the bundle holding them is here.
                 .chain(
@@ -834,6 +873,7 @@ impl Speech {
                 Ok(match family {
                     Family::Kokoro => Engine::Sherpa(load_kokoro(&dir, accelerated)?),
                     Family::Pocket => Engine::Sherpa(load_pocket(&dir, accelerated)?),
+                    Family::Piper => Engine::Sherpa(load_piper(&dir, accelerated)?),
                     #[cfg(feature = "chatterbox")]
                     Family::Chatterbox => Engine::Chatterbox(Box::new(
                         crate::chatterbox::Engine::load(&dir, accelerated)?,
@@ -964,7 +1004,8 @@ impl Speech {
         let Engine::Sherpa(tts) = tts;
 
         // Kokoro picks its speaker by id; Pocket reads the voice out of a
-        // recording, decoded here to what the model listens at.
+        // recording, decoded here to what the model listens at; Piper has
+        // one voice in its bundle and reads the text in it.
         let generation = match family {
             Family::Kokoro => GenerationConfig {
                 sid: request.voice,
@@ -972,7 +1013,7 @@ impl Speech {
                 silence_scale,
                 ..Default::default()
             },
-            _ => {
+            Family::Pocket => {
                 progress(JobStage::Reading);
                 let samples = reference_samples(&recordings()?, request)?;
                 GenerationConfig {
@@ -991,6 +1032,18 @@ impl Speech {
                     ),
                     ..Default::default()
                 }
+            }
+            Family::Piper => GenerationConfig {
+                // One voice in the bundle; speed is the only dial VITS
+                // honours here.
+                sid: 0,
+                speed,
+                ..Default::default()
+            },
+            // Chatterbox reads in its own loop above and returns before
+            // this match; a build without it refuses to load the model.
+            Family::Chatterbox => {
+                return Err("Chatterbox is not part of this build".to_owned());
             }
         };
 
@@ -1208,6 +1261,41 @@ fn load_pocket(dir: &Path, accelerated: bool) -> Result<OfflineTts, String> {
                 // The voices offered plus a few clones, before the oldest
                 // embedding is worked out again.
                 voice_embedding_cache_capacity: 8,
+            },
+            num_threads: threads(),
+            provider: Some(provider(accelerated).to_owned()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    OfflineTts::create(&config)
+        .ok_or_else(|| "the speech engine failed to load - try re-downloading the model".to_owned())
+}
+
+/// Builds the engine for a Piper (VITS) bundle: the one network, its
+/// token table, and the espeak-ng data it phonemises with. The bundle
+/// layout is the sherpa-onnx one: `<id>.onnx`, `tokens.txt`, and an
+/// `espeak-ng-data/` folder beside them.
+fn load_piper(dir: &Path, accelerated: bool) -> Result<OfflineTts, String> {
+    let network = onnx_file(dir)
+        .ok_or_else(|| "the model folder has no .onnx network - re-download it".to_owned())?;
+    let tokens = {
+        let path = dir.join("tokens.txt");
+        path.is_file()
+            .then(|| path.to_string_lossy().into_owned())
+            .ok_or_else(|| "the model folder has no tokens.txt - re-download it".to_owned())?
+    };
+    let data = dir.join("espeak-ng-data");
+    if !data.is_dir() {
+        return Err("the model folder has no espeak-ng-data - re-download it".to_owned());
+    }
+    let config = OfflineTtsConfig {
+        model: OfflineTtsModelConfig {
+            vits: OfflineTtsVitsModelConfig {
+                model: Some(network.to_string_lossy().into_owned()),
+                tokens: Some(tokens),
+                data_dir: Some(data.to_string_lossy().into_owned()),
+                ..Default::default()
             },
             num_threads: threads(),
             provider: Some(provider(accelerated).to_owned()),

@@ -266,17 +266,22 @@ private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun voiceLabel(raw: String): String {
     val parts = raw.split('_')
     val name = parts.last().replaceFirstChar { it.uppercase() }
-    val accent = when (parts.firstOrNull()?.firstOrNull()) {
-        'a' -> " (US)"
-        'b' -> " (UK)"
-        'j' -> " (JP)"
-        'z' -> " (ZH)"
-        'e' -> " (ES)"
-        'f' -> " (FR)"
-        'h' -> " (HI)"
-        'i' -> " (IT)"
-        'p' -> " (PT)"
-        else -> ""
+    // "id" is the whole language code for Indonesian; the single letters
+    // below are Kokoro's accent codes, where 'i' means Italian.
+    val accent = when (parts.firstOrNull()) {
+        "id" -> " (ID)"
+        else -> when (parts.firstOrNull()?.firstOrNull()) {
+            'a' -> " (US)"
+            'b' -> " (UK)"
+            'j' -> " (JP)"
+            'z' -> " (ZH)"
+            'e' -> " (ES)"
+            'f' -> " (FR)"
+            'h' -> " (HI)"
+            'i' -> " (IT)"
+            'p' -> " (PT)"
+            else -> ""
+        }
     }
     return if (parts.size >= 2 && parts.first().length == 2) "$name$accent" else name
 }
